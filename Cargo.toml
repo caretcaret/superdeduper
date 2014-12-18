@@ -6,3 +6,6 @@ authors = ["Jeffrey Zhang <caretcaret@gmail.com>"]
 
 [dependencies.image]
 git = "https://github.com/PistonDevelopers/image"
+
+[dependencies.docopt_macros]
+git = "git://github.com/docopt/docopt.rs"

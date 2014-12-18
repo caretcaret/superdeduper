@@ -2,7 +2,21 @@
 name = "dedupe"
 version = "0.0.1"
 dependencies = [
+ "docopt_macros 0.6.15 (git+git://github.com/docopt/docopt.rs)",
  "image 0.2.0-alpha.3 (git+https://github.com/PistonDevelopers/image)",
+]
+
+[[package]]
+name = "docopt"
+version = "0.6.15"
+source = "git+git://github.com/docopt/docopt.rs#6f2da7c4033cec2ac67b74fa473343e3889bda5c"
+
+[[package]]
+name = "docopt_macros"
+version = "0.6.15"
+source = "git+git://github.com/docopt/docopt.rs#6f2da7c4033cec2ac67b74fa473343e3889bda5c"
+dependencies = [
+ "docopt 0.6.15 (git+git://github.com/docopt/docopt.rs)",
 ]
 
 [[package]]
