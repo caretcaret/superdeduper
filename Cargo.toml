@@ -1,0 +1,8 @@
+[package]
+
+name = "dedupe"
+version = "0.0.1"
+authors = ["Jeffrey Zhang <caretcaret@gmail.com>"]
+
+[dependencies.image]
+git = "https://github.com/PistonDevelopers/image"
