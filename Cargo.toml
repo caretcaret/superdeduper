@@ -4,8 +4,7 @@ name = "dedupe"
 version = "0.0.1"
 authors = ["Jeffrey Zhang <caretcaret@gmail.com>"]
 
-[dependencies.image]
-git = "https://github.com/PistonDevelopers/image"
-
-[dependencies.docopt_macros]
-git = "git://github.com/docopt/docopt.rs"
+[dependencies]
+docopt = "*"
+image = "*"
+rustc-serialize = "0.2"
