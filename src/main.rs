@@ -6,20 +6,24 @@ extern crate glob;
 use docopt::Docopt;
 use std::fs;
 use std::fmt;
-use std::path::Path;
-use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::ascii::AsciiExt;
 use std::f32;
 use image::GenericImage;
 use image::Pixel;
 
 static USAGE: &'static str = "
-Usage: superdeduper <dir>
+Image deduplicator. Implemented using the pHash perceptual hash algorithm.
+This program moves all images from source to target, renaming similar images
+as <canonical hash>-<dupe number>-<image hash> for easy recognition and deletion.
+
+Usage: superdeduper <source> <target>
 ";
 
 #[derive(RustcDecodable, Debug)]
 struct Args {
-    arg_dir: String,
+    arg_source: String,
+    arg_target: String,
 }
 
 // extension-based detection of filetype
@@ -42,22 +46,22 @@ fn supported_extension(path: &Path) -> Option<image::ImageFormat> {
     }
 }
 
-trait ImageSignature {
+trait ImageSignature: fmt::Display {
     fn new(image: &image::DynamicImage) -> Self;
 
+    fn distance(&self, other: &Self) -> u32;
+    fn is_similar(distance: u32) -> bool;
+    // for human-interpretable measurements of similarity
     fn similarity(&self, other: &Self) -> f64;
-    fn is_similar(&self, other: &Self) -> bool {
-        self.similarity(other) >= 0.99f64
-    }
 }
 
 #[derive(Debug)]
 struct PHash(u64);
 
-impl fmt::LowerHex for PHash {
+impl fmt::Display for PHash {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            &PHash(repr) => { repr.fmt(formatter) }
+            &PHash(repr) => { write!(formatter, "{:016x}", repr) }
         }
     }
 }
@@ -106,52 +110,155 @@ impl ImageSignature for PHash {
         PHash(hash_value)
     }
 
-    fn similarity(&self, other: &PHash) -> f64 {
+    fn distance(&self, other: &PHash) -> u32 {
         // metric: hamming distance of two hashes
         match (self, other) {
             (&PHash(h1), &PHash(h2)) => {
-                ((h1 ^ h2).count_zeros() as f64) / 64.0
+                (h1 ^ h2).count_ones()
             }
         }
     }
+
+    fn is_similar(distance: u32) -> bool {
+        distance < 8
+    }
+
+    fn similarity(&self, other: &PHash) -> f64 {
+        1.0 - (self.distance(other) as f64 / 64.0)
+    }
+}
+
+#[derive(Clone)]
+struct ProcessedImage<T: ImageSignature> {
+  sig: T,
+  path: PathBuf,
+  size: u64,
 }
 
 // read files and generate signatures for them
 fn process_image<T: ImageSignature>(
-        path: &Path,
-        format: image::ImageFormat
-    ) -> Option<T> {
-    fs::File::open(path).ok().and_then(|file| {
-        image::load(file, format).ok()
+      pathbuf: PathBuf,
+      format: image::ImageFormat
+  ) -> Option<ProcessedImage<T>> {
+  fs::File::open(pathbuf.as_path()).ok().and_then(|file| {
+      let im = image::load(file, format);
+
+      match im {
+        Err(err) => {
+          // image could not be read by image library
+          println!("[{}] {}", err, pathbuf.display());
+          None
+        },
+        Ok(image) => { Some(image) }
+      }
     }).map(|image| {
-        ImageSignature::new(&image)
-    })
+      ProcessedImage {
+        sig: ImageSignature::new(&image),
+        path: pathbuf,
+        size: (image.width() as u64) * (image.height() as u64)
+      }
+  })
+}
+
+fn new_filename<T: ImageSignature>(
+    old_path: &PathBuf,
+    new_directory: &Path,
+    canon_signature: &T,
+    this_signature: &T,
+    version: u32,
+  ) -> PathBuf {
+  let mut new_path = PathBuf::new();
+  new_path.push(new_directory);
+
+  // show indication of repetition and actual image signature
+  if version != 0 {
+    new_path.push(format!("{}-{}-{}", canon_signature, version, this_signature));
+  } else {
+    new_path.push(format!("{}", canon_signature));
+  }
+
+  match supported_extension(old_path) {
+    Some(image::ImageFormat::GIF) => { new_path.set_extension("gif"); },
+    Some(image::ImageFormat::PNG) => { new_path.set_extension("png"); },
+    Some(image::ImageFormat::JPEG) => { new_path.set_extension("jpg"); },
+    Some(image::ImageFormat::WEBP) => { new_path.set_extension("webp"); },
+    _ => {}
+  }
+
+  new_path
 }
 
 fn main() {
-    let args: Args = Docopt::new(USAGE)
-                            .and_then(|d| d.decode())
-                            .unwrap_or_else(|e| e.exit());
+  let args: Args = Docopt::new(USAGE)
+                          .and_then(|d| d.decode())
+                          .unwrap_or_else(|e| e.exit());
 
-    // container for signatures
-    let mut signatures = HashMap::new();
+  // container for image metadata and signatures
+  let mut processed_images = Vec::new();
+  let new_directory = Path::new(&args.arg_target);
 
-    // generate a cache file for the signatures we'll be generating
-    // TODO
+  // inline renaming not implemented, don't be destructive
+  assert!(args.arg_source != args.arg_target);
 
-    // for each path in the directory
-    for glob_result in glob::glob(&(args.arg_dir + "/*")).unwrap() {
-        let path = glob_result.unwrap();
-        if fs::metadata(&path).unwrap().is_file() {
-            supported_extension(&path).and_then(|format| {
-                // create the image signature
-                process_image::<PHash>(&path, format)
-            }).map(|sig| {
-                println!("{:016x} {}", sig, path.display());
-                // add it to the hash table
-                signatures.insert(path.clone(), sig);
-            });
-        }
+  println!("[Reading images.]");
+  // for each path in the directory
+  for glob_result in glob::glob(&(args.arg_source + "/*")).unwrap() {
+      let pathbuf: PathBuf = glob_result.unwrap();
+      if fs::metadata(pathbuf.as_path()).unwrap().is_file() {
+          supported_extension(pathbuf.as_path()).and_then(|format| {
+              // create the image signature
+              process_image::<PHash>(pathbuf, format)
+          }).map(|processed_image| {
+              println!("{} {}", processed_image.sig, processed_image.path.display());
+              processed_images.push(processed_image);
+          });
+      }
+  }
+  println!("[{} files read.]", processed_images.len());
+
+  println!("[Finding dupes. This might take a while!]");
+  let mut dupes: Vec<Vec<ProcessedImage<PHash>>> = Vec::new();
+
+  // get an image with largest resolution, find its neighbors until empty.
+  // not very rustic because my rust is very rusty :(
+  while !processed_images.is_empty() {
+    let mut neighbors = Vec::new();
+    let image = processed_images.pop().unwrap();
+
+    let mut i = processed_images.len();
+
+    loop {
+      if i == 0 { break }
+      i -= 1;
+      if PHash::is_similar(processed_images[i].sig.distance(&image.sig)) {
+        neighbors.push(processed_images.remove(i));
+      }
     }
+
+    neighbors.push(image);
+    dupes.push(neighbors);
+  }
+
+  dupes.sort_by(|a, b| { b.len().cmp(&a.len()) });
+
+  println!("[Moving files.]");
+  match fs::create_dir_all(new_directory) {
+    Err(err) => { println!("{}", err); },
+    Ok(_) => { }
+  }
+  for group in dupes.iter() {
+    assert!(group.len() > 0);
+
+    // canonical image is the one with the largest file size
+    let canon = &group[group.len() - 1].sig;
+    for (i, image) in group.iter().enumerate() {
+      let new_loc = new_filename(&image.path, &new_directory, canon, &image.sig, i as u32);
+      println!("{} => {}", image.path.display(), new_loc.display());
+      match fs::rename(&image.path, &new_loc) {
+        Err(err) => { println!("{}", err); },
+        Ok(_) => { }
+      }
+    }
+  }
 
 }
