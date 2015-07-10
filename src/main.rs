@@ -216,7 +216,7 @@ fn main() {
   }
   println!("[{} files read.]", processed_images.len());
 
-  println!("[Finding dupes. This might take a while!]");
+  println!("[Finding dupes.]");
   let mut dupes: Vec<Vec<ProcessedImage<PHash>>> = Vec::new();
 
   // get an image with largest resolution, find its neighbors until empty.
